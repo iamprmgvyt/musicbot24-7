@@ -116,7 +116,7 @@ async function joinAndPlay(channel) {
     channelId: channel.id,
     guildId: channel.guild.id,
     adapterCreator: channel.guild.voiceAdapterCreator,
-    selfDeaf: false,
+    selfDeaf: true,
     selfMute: false
   });
 
