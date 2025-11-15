@@ -1,15 +1,17 @@
 /**
- * Autonomous Discord Music Bot 24/7
+ * Autonomous Discord Music Bot 24/7 + Express uptime server
  * index.js
- * 
+ *
  * Features:
  * - Auto join a fixed voice channel
- * - Play doubletake.mp4 continuously in loop
+ * - Play doubletake.mp4 continuously in loop (audio-only)
  * - Auto reconnect if disconnected
+ * - Express server for uptime ping
  * - Debug logging via .env DEBUG=true
  */
 
 require('dotenv').config();
+const express = require('express');
 const { Client, GatewayIntentBits } = require('discord.js');
 const {
   joinVoiceChannel,
@@ -27,6 +29,7 @@ const path = require('path');
 
 const TOKEN = process.env.DISCORD_BOT_TOKEN;
 const VOICE_CHANNEL_ID = process.env.VOICE_CHANNEL_ID;
+const PORT = process.env.PORT || 3000;
 const AUDIO_FILE = path.join(__dirname, 'doubletake.mp4');
 const DEBUG = String(process.env.DEBUG || 'false').toLowerCase() === 'true';
 
@@ -35,7 +38,15 @@ if (!TOKEN || !VOICE_CHANNEL_ID) {
   process.exit(1);
 }
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates] });
+// --- Express server for uptime ---
+const app = express();
+app.get('/', (req, res) => res.send('Discord Music Bot is running!'));
+app.listen(PORT, () => console.log(`Express server listening on port ${PORT}`));
+
+// --- Discord bot setup ---
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates]
+});
 
 const player = createAudioPlayer({
   behaviors: { noSubscriber: NoSubscriberBehavior.Play }
@@ -45,44 +56,61 @@ function log(...args) {
   if (DEBUG) console.log('[DEBUG]', ...args);
 }
 
-// Check audio file
-if (!fs.existsSync(AUDIO_FILE)) {
-  console.error(`Audio file not found: ${AUDIO_FILE}`);
-  process.exit(1);
+async function ensureFileExists() {
+  if (!fs.existsSync(AUDIO_FILE)) {
+    console.error(`Audio file not found: ${AUDIO_FILE}`);
+    return false;
+  }
+  return true;
 }
 
-// Spawn ffmpeg stream
 function createFFmpegStream() {
   const args = [
     '-re',
     '-i', AUDIO_FILE,
-    '-analyzeduration', '0',
-    '-loglevel', 'warning',
-    '-f', 's16le',
+    '-vn',
     '-ar', '48000',
     '-ac', '2',
+    '-f', 's16le',
     'pipe:1'
   ];
   const proc = spawn(ffmpegPath || 'ffmpeg', args, { windowsHide: true });
   proc.on('error', (err) => console.error('ffmpeg spawn error:', err));
   proc.stderr.on('data', (d) => log('ffmpeg:', d.toString().trim()));
+  proc.stdout.on('data', (d) => log('ffmpeg stdout bytes:', d.length));
   return proc;
 }
 
-// Play audio continuously
-function playAudioLoop() {
-  const ff = createFFmpegStream();
-  const resource = createAudioResource(ff.stdout, { inputType: 'raw' });
-  player.play(resource);
-  log('Playback started.');
+async function playLoop() {
+  if (!await ensureFileExists()) return;
 
-  player.once(AudioPlayerStatus.Idle, () => {
-    try { ff.kill('SIGKILL'); } catch(e){}
-    setTimeout(playAudioLoop, 100); // slight delay to prevent busy-loop
-  });
+  while (true) {
+    try {
+      const ff = createFFmpegStream();
+      const resource = createAudioResource(ff.stdout, { inputType: 'raw' });
+      player.play(resource);
+      log('Playback started.');
+
+      await new Promise((resolve) => {
+        const onState = (oldState, newState) => {
+          log('player state', oldState.status, '->', newState.status);
+          if (newState.status === AudioPlayerStatus.Idle) {
+            player.removeListener('stateChange', onState);
+            try { ff.kill('SIGKILL'); } catch (e) {}
+            resolve();
+          }
+        };
+        player.on('stateChange', onState);
+      });
+
+      await new Promise(r => setTimeout(r, 200));
+    } catch (err) {
+      console.error('Error in play loop:', err);
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  }
 }
 
-// Join voice channel and start playback
 async function joinAndPlay(channel) {
   let connection = joinVoiceChannel({
     channelId: channel.id,
@@ -93,7 +121,11 @@ async function joinAndPlay(channel) {
   });
 
   connection.subscribe(player);
-  playAudioLoop();
+
+  if (!playLoop._started) {
+    playLoop._started = true;
+    playLoop().catch(err => console.error('playLoop crashed:', err));
+  }
 
   connection.on('stateChange', async (oldState, newState) => {
     log('connection state', oldState.status, '->', newState.status);
@@ -122,8 +154,12 @@ client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}`);
   try {
     const ch = await client.channels.fetch(VOICE_CHANNEL_ID).catch(() => null);
-    if (!ch || (!ch.isVoiceBased && ch.type !== 2)) {
-      console.error('Provided VOICE_CHANNEL_ID is not a voice channel or inaccessible.');
+    if (!ch) {
+      console.error('VOICE_CHANNEL_ID not found or inaccessible.');
+      return;
+    }
+    if (!ch.isVoiceBased && ch.type !== 2) {
+      console.error('Provided VOICE_CHANNEL_ID is not a voice channel.');
       return;
     }
     console.log('Found voice channel. Joining...');
@@ -135,7 +171,6 @@ client.once('ready', async () => {
 
 client.on('error', console.error);
 client.on('shardError', console.error);
-
 process.on('unhandledRejection', console.error);
 
 client.login(TOKEN).catch(err => {
@@ -143,8 +178,9 @@ client.login(TOKEN).catch(err => {
   process.exit(1);
 });
 
-// graceful shutdown
+// Graceful shutdown
 process.on('SIGINT', () => {
   console.log('SIGINT received — exiting.');
   setTimeout(() => process.exit(0), 1000);
 });
+
