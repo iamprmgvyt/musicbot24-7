@@ -45,15 +45,13 @@ function log(...args) {
   if (DEBUG) console.log('[DEBUG]', ...args);
 }
 
-async function ensureFileExists() {
-  if (!fs.existsSync(AUDIO_FILE)) {
-    console.error(`Audio file not found: ${AUDIO_FILE}`);
-    return false;
-  }
-  return true;
+// Check audio file
+if (!fs.existsSync(AUDIO_FILE)) {
+  console.error(`Audio file not found: ${AUDIO_FILE}`);
+  process.exit(1);
 }
 
-// Spawn ffmpeg to decode mp4 to PCM
+// Spawn ffmpeg stream
 function createFFmpegStream() {
   const args = [
     '-re',
@@ -71,36 +69,17 @@ function createFFmpegStream() {
   return proc;
 }
 
-// Loop playback continuously
-async function playLoop() {
-  if (!await ensureFileExists()) return;
+// Play audio continuously
+function playAudioLoop() {
+  const ff = createFFmpegStream();
+  const resource = createAudioResource(ff.stdout, { inputType: 'raw' });
+  player.play(resource);
+  log('Playback started.');
 
-  while (true) {
-    try {
-      const ff = createFFmpegStream();
-      const resource = createAudioResource(ff.stdout, { inputType: 'raw' });
-      player.play(resource);
-      log('Playback started.');
-
-      await new Promise((resolve) => {
-        const onState = (oldState, newState) => {
-          log('player state', oldState.status, '->', newState.status);
-          if (newState.status === AudioPlayerStatus.Idle) {
-            player.removeListener('stateChange', onState);
-            try { ff.kill('SIGKILL'); } catch (e) {}
-            resolve();
-          }
-        };
-        player.on('stateChange', onState);
-      });
-
-      // small delay to avoid busy-loop
-      await new Promise(r => setTimeout(r, 200));
-    } catch (err) {
-      console.error('Error in play loop:', err);
-      await new Promise(r => setTimeout(r, 2000));
-    }
-  }
+  player.once(AudioPlayerStatus.Idle, () => {
+    try { ff.kill('SIGKILL'); } catch(e){}
+    setTimeout(playAudioLoop, 100); // slight delay to prevent busy-loop
+  });
 }
 
 // Join voice channel and start playback
@@ -114,11 +93,7 @@ async function joinAndPlay(channel) {
   });
 
   connection.subscribe(player);
-
-  if (!playLoop._started) {
-    playLoop._started = true;
-    playLoop().catch(err => console.error('playLoop crashed:', err));
-  }
+  playAudioLoop();
 
   connection.on('stateChange', async (oldState, newState) => {
     log('connection state', oldState.status, '->', newState.status);
@@ -147,12 +122,8 @@ client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}`);
   try {
     const ch = await client.channels.fetch(VOICE_CHANNEL_ID).catch(() => null);
-    if (!ch) {
-      console.error('VOICE_CHANNEL_ID not found or inaccessible.');
-      return;
-    }
-    if (!ch.isVoiceBased && ch.type !== 2) {
-      console.error('Provided VOICE_CHANNEL_ID is not a voice channel.');
+    if (!ch || (!ch.isVoiceBased && ch.type !== 2)) {
+      console.error('Provided VOICE_CHANNEL_ID is not a voice channel or inaccessible.');
       return;
     }
     console.log('Found voice channel. Joining...');
@@ -165,9 +136,7 @@ client.once('ready', async () => {
 client.on('error', console.error);
 client.on('shardError', console.error);
 
-process.on('unhandledRejection', (err) => {
-  console.error('UnhandledRejection:', err);
-});
+process.on('unhandledRejection', console.error);
 
 client.login(TOKEN).catch(err => {
   console.error('Failed to login:', err);
