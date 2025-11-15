@@ -124,7 +124,7 @@ async function joinAndPlay(channel) {
 
   // try to ensure the connection is ready
   try {
-    await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
+    await entersState(connection, VoiceConnectionStatus.Ready, 60_000);
     console.log('Voice connection ready.');
   } catch (e) {
     console.warn('Voice connection not ready within timeout, continuing. Error:', e.message || e);
