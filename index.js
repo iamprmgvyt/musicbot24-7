@@ -4,7 +4,8 @@
  *
  * Features:
  * - Auto join a fixed voice channel
- * - Play doubletake.mp4 continuously in loop (audio-only)
+ * - Play HeartbreakAnniversary.mp4
+ continuously in loop (audio-only)
  * - Auto reconnect if disconnected
  * - Express server for uptime ping
  * - Debug logging via .env DEBUG=true
@@ -30,7 +31,8 @@ const path = require('path');
 const TOKEN = process.env.DISCORD_BOT_TOKEN;
 const VOICE_CHANNEL_ID = process.env.VOICE_CHANNEL_ID;
 const PORT = process.env.PORT || 3000;
-const AUDIO_FILE = path.join(__dirname, 'doubletake.mp4');
+const AUDIO_FILE = path.join(__dirname, 'HeartbreakAnniversary.mp4
+');
 const DEBUG = String(process.env.DEBUG || 'false').toLowerCase() === 'true';
 
 if (!TOKEN || !VOICE_CHANNEL_ID) {
